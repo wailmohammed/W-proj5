@@ -94,10 +94,17 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
           .eq('user_id', user.id);
 
         if (error) {
-          console.error('Error fetching portfolios:', error.message || JSON.stringify(error));
-          // If table missing (42P01), don't crash, just show empty state
-          if (error.code === '42P01') {
-              console.warn("Database tables missing. Please run supabase_schema.sql");
+          // Better error logging to console
+          console.warn('Error fetching portfolios:', error.message || JSON.stringify(error));
+          
+          // Check specifically for missing table error (Postgres code 42P01)
+          if (error.code === '42P01' || error.message?.includes('does not exist')) {
+              console.warn("Database tables missing. Using MOCK data fallback.");
+              setPortfolios(MOCK_PORTFOLIOS_LIST);
+              if (!activePortfolioId) setActivePortfolioId(MOCK_PORTFOLIOS_LIST[0].id);
+          } else {
+              // Other errors, default to empty to avoid crash
+              setPortfolios([]);
           }
           return;
         }
@@ -109,12 +116,15 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
           if (!activePortfolioId) {
               setActivePortfolioId(data[0].id); 
           }
-        } else if (data && data.length === 0) {
-          // Create a default portfolio if none exists
-          addNewPortfolio('My First Portfolio', 'Mixed');
+        } else {
+          // No portfolios found, but no error. This is a valid state for a new user.
+          setPortfolios([]);
         }
     } catch (err) {
-        console.error("Unexpected error in fetchPortfoliosList", err);
+        console.error("Unexpected exception in fetchPortfoliosList:", err);
+        // Safe fallback
+        setPortfolios(MOCK_PORTFOLIOS_LIST);
+        if (!activePortfolioId) setActivePortfolioId(MOCK_PORTFOLIOS_LIST[0].id);
     }
   }, [user, activePortfolioId]);
 
@@ -137,6 +147,13 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
       }
 
       try {
+          // Check if we are in fallback mode (using mock IDs)
+          if (activePortfolioId.startsWith('p') && activePortfolioId.length < 5) {
+             // Fallback for mock IDs if DB is down/empty
+             setActivePortfolio(MOCK_PORTFOLIO);
+             return;
+          }
+
           // Parallel fetching for performance
           const [
               { data: portData, error: portError },
@@ -153,7 +170,11 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
           ]);
 
           if (portError) {
-              console.error("Error fetching active portfolio details:", portError.message);
+              console.warn("Error fetching active portfolio details:", portError.message);
+              // Fallback to mock if it was a table missing error and we fell back to mock list
+              if (portError.code === '42P01' || activePortfolioId === 'p1') {
+                  setActivePortfolio(MOCK_PORTFOLIO);
+              }
               return;
           }
 
@@ -219,6 +240,8 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
           }
       } catch (e) {
           console.error("Exception fetching portfolio data:", e);
+          // Prevent white screen death
+          setActivePortfolio(MOCK_PORTFOLIO);
       }
   }, [activePortfolioId, user]);
 
@@ -229,6 +252,10 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
   // --- 3. Real-time Subscription ---
   useEffect(() => {
     if (!activePortfolioId || !user || !isSupabaseConfigured) return;
+    
+    // Don't subscribe if we are using mock IDs
+    if (activePortfolioId.startsWith('p') && activePortfolioId.length < 5) return;
+
     const channel = supabase.channel(`portfolio-${activePortfolioId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'holdings', filter: `portfolio_id=eq.${activePortfolioId}` }, () => fetchPortfolioData())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions', filter: `portfolio_id=eq.${activePortfolioId}` }, () => fetchPortfolioData())
@@ -276,12 +303,20 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
           setActiveWatchlistId('w1');
           return;
       }
-      const { data, error } = await supabase.from('watchlists').select('*').eq('user_id', user.id);
-      if (!error && data && data.length > 0) {
-          setWatchlists(data.map(w => ({ id: w.id, name: w.name, symbols: w.symbols || [] })));
-          setActiveWatchlistId(data[0].id);
-      } else if (!error) {
-          createWatchlist('My First Watchlist');
+      try {
+        const { data, error } = await supabase.from('watchlists').select('*').eq('user_id', user.id);
+        if (error) {
+            if (error.code !== '42P01') console.warn('Error fetching watchlists:', error.message);
+            return;
+        }
+        if (data && data.length > 0) {
+            setWatchlists(data.map(w => ({ id: w.id, name: w.name, symbols: w.symbols || [] })));
+            setActiveWatchlistId(data[0].id);
+        } else {
+            createWatchlist('My First Watchlist');
+        }
+      } catch (e) {
+          console.error("Error fetching watchlists", e);
       }
   };
 
@@ -293,14 +328,18 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
           setActivePortfolioId(newId);
           return;
       }
-      const { data, error } = await supabase.from('portfolios').insert({ user_id: user.id, name, type, cash_balance: 0 }).select().single();
-      if (error) {
-          console.error("Error creating portfolio:", error.message);
-          return;
-      }
-      if (data) {
-          setPortfolios(prev => [...prev, { id: data.id, name: data.name, type: data.type }]);
-          setActivePortfolioId(data.id);
+      try {
+        const { data, error } = await supabase.from('portfolios').insert({ user_id: user.id, name, type, cash_balance: 0 }).select().single();
+        if (error) {
+            console.error("Error creating portfolio:", error.message);
+            return;
+        }
+        if (data) {
+            setPortfolios(prev => [...prev, { id: data.id, name: data.name, type: data.type }]);
+            setActivePortfolioId(data.id);
+        }
+      } catch (e) {
+          console.error("Exception creating portfolio:", e);
       }
   };
 
@@ -309,7 +348,8 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
       const marketAsset = MOCK_MARKET_ASSETS.find(a => a.id === assetId);
       if (!marketAsset) return;
 
-      if (!isSupabaseConfigured) {
+      if (!isSupabaseConfigured || activePortfolioId.startsWith('p')) {
+          // Mock Logic
           const newTx: Transaction = { id: `tx-${Date.now()}`, date, type, symbol: marketAsset.symbol, shares, price, totalValue: shares * price };
           const newHolding: Holding = { ...marketAsset, shares, avgPrice: price, currentPrice: price };
           

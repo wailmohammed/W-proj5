@@ -146,7 +146,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       let joinedDate = new Date().toISOString().split('T')[0];
 
       if (error) {
-          if (error.code === 'PGRST116' || error.message.includes('0 rows')) {
+          // Handle missing tables or missing row
+          if (error.code === '42P01') {
+              console.warn("CRITICAL: 'profiles' table missing. Run supabase_schema.sql.");
+              // Fallback to avoid lock-out
+          } else if (error.code === 'PGRST116' || error.message.includes('0 rows')) {
               // Missing Row: Logic to auto-fix if triggers failed
               console.log("Profile missing for user, attempting to create default profile...");
               const { error: insertError } = await supabase.from('profiles').insert({
@@ -158,18 +162,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               });
               
               if (!insertError) {
-                  // Retry fetch after insertion
                   return fetchUserProfile(userId, email);
-              } else {
-                  if (insertError.code === '42P01') {
-                      console.error("CRITICAL: Database tables missing. Please run supabase_schema.sql");
-                  } else {
-                      console.error("Failed to auto-create profile:", insertError);
-                  }
               }
-          } else if (error.code === '42P01') {
-              // 42P01 is 'undefined_table' in Postgres
-              console.error("CRITICAL: Database tables missing (profiles table not found).");
           } else {
               console.error('Error fetching profile data:', error);
           }
@@ -282,7 +276,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
     }
 
-    // 2. Fallback for Demo Accounts
+    // 2. Fallback for Demo Accounts (if Supabase fails or using test account)
     const demoAccounts: Record<string, User> = {
         'wailafmohammed@gmail.com': {
             id: 'super-admin-wail',
