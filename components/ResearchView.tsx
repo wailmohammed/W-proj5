@@ -7,6 +7,8 @@
 
 
 
+
+
 import React, { useState, useEffect } from 'react';
 import { Search, TrendingUp, AlertTriangle, CheckCircle, FileText, Sparkles, Loader2, Users, Briefcase, Lock, Plus, ExternalLink, Scale, BarChart, Newspaper, ThumbsUp, ThumbsDown, Eye, EyeOff, List, ChevronDown, PlusCircle, Check } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, AreaChart, Area, XAxis, YAxis, CartesianGrid, BarChart as RechartsBarChart, Bar, Legend } from 'recharts';
@@ -65,8 +67,8 @@ const ResearchView: React.FC = () => {
       fetchAI();
   }, [asset.symbol]);
 
-  // Watchlist State
-  const activeWatchlist = watchlists.find(w => w.id === activeWatchlistId) || watchlists[0];
+  // Watchlist State with Safe Fallback
+  const activeWatchlist = watchlists.find(w => w.id === activeWatchlistId) || watchlists[0] || { id: 'default', name: 'My Watchlist', symbols: [] };
   const isWatching = activeWatchlist.symbols.includes(asset.symbol);
 
   const handleCreateWatchlist = (e: React.FormEvent) => {

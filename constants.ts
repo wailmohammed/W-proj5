@@ -226,6 +226,12 @@ export const MOCK_MARKET_ASSETS: Holding[] = [
     },
     {
         id: '21', symbol: 'ARWK', name: 'Ark Innovation ETF', shares: 0, avgPrice: 0, currentPrice: 42.00, assetType: AssetType.ETF, sector: 'Technology', country: 'USA', dividendYield: 0, expenseRatio: 0.75, safetyScore: 30, snowflake: { value: 1, future: 5, past: 2, health: 4, dividend: 0, total: 12 }, logoUrl: 'https://logo.clearbit.com/ark-funds.com', financials: generateFinancials(), competitors: []
+    },
+    {
+        id: '22', symbol: 'AMZN', name: 'Amazon.com Inc.', shares: 0, avgPrice: 0, currentPrice: 145.00, assetType: AssetType.STOCK, sector: 'Consumer Cyclical', country: 'USA', dividendYield: 0, expenseRatio: 0, safetyScore: 75, snowflake: { value: 3, future: 5, past: 4, health: 4, dividend: 0, total: 16 }, logoUrl: 'https://logo.clearbit.com/amazon.com', financials: generateFinancials(), competitors: generateCompetitors('AMZN')
+    },
+    {
+        id: '23', symbol: 'VUSA', name: 'Vanguard S&P 500 (Dist)', shares: 0, avgPrice: 0, currentPrice: 64.10, assetType: AssetType.ETF, sector: 'Diversified', country: 'UK', dividendYield: 1.45, expenseRatio: 0.07, safetyScore: 95, snowflake: { value: 3, future: 3, past: 3, health: 5, dividend: 3, total: 17 }, logoUrl: 'https://logo.clearbit.com/vanguard.co.uk', financials: generateFinancials(), competitors: []
     }
 ];
 

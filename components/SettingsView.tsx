@@ -1,30 +1,298 @@
 
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { usePortfolio } from '../context/PortfolioContext';
-import { User, Shield, CreditCard, LogOut, CheckCircle, Copy, Check, X, Loader2, Link as LinkIcon, Plus, RefreshCw, FileSpreadsheet, UploadCloud, Briefcase, Layers, Network, Eye, Edit2 } from 'lucide-react';
-import { PlanTier, CryptoWallet } from '../types';
+import { User, Shield, CreditCard, LogOut, CheckCircle, Copy, Check, X, Loader2, Link as LinkIcon, Plus, RefreshCw, FileSpreadsheet, UploadCloud, Briefcase, Layers, Network, Eye, Edit2, Globe, Database, AlertCircle } from 'lucide-react';
+import { PlanTier, CryptoWallet, PortfolioSummary } from '../types';
+
+// --- HELPER COMPONENTS DEFINED FIRST TO AVOID INITIALIZATION ERRORS ---
+
+const PaymentModal: React.FC<{
+    planId: PlanTier;
+    wallets: CryptoWallet[];
+    price: number;
+    onClose: () => void;
+    onSuccess: (planId: PlanTier) => void;
+}> = ({ planId, wallets, price, onClose, onSuccess }) => {
+    const [selectedWallet, setSelectedWallet] = useState<string>(wallets[0]?.id || '');
+    const [processing, setProcessing] = useState(false);
+
+    const handlePayment = () => {
+        setProcessing(true);
+        setTimeout(() => {
+            onSuccess(planId);
+            setProcessing(false);
+        }, 2000);
+    };
+
+    const wallet = wallets.find(w => w.id === selectedWallet);
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+            <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-fade-in-up">
+                <div className="p-6 border-b border-slate-800 flex justify-between items-center">
+                    <h3 className="text-xl font-bold text-white">Upgrade to {planId}</h3>
+                    <button onClick={onClose}><X className="w-5 h-5 text-slate-400 hover:text-white" /></button>
+                </div>
+                <div className="p-6 space-y-6">
+                    <div className="text-center">
+                        <div className="text-sm text-slate-400 mb-1">Total to Pay</div>
+                        <div className="text-3xl font-bold text-white">${price} <span className="text-sm text-slate-500 font-normal">/ month</span></div>
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Select Payment Method</label>
+                        <div className="space-y-2">
+                            {wallets.length > 0 ? wallets.map(w => (
+                                <button
+                                    key={w.id}
+                                    onClick={() => setSelectedWallet(w.id)}
+                                    className={`w-full flex items-center gap-3 p-3 rounded-xl border transition-all ${selectedWallet === w.id ? 'bg-brand-600/10 border-brand-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'}`}
+                                >
+                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs ${selectedWallet === w.id ? 'bg-brand-600 text-white' : 'bg-slate-800'}`}>
+                                        {w.coin[0]}
+                                    </div>
+                                    <div className="text-left">
+                                        <div className="font-bold text-sm">{w.coin}</div>
+                                        <div className="text-xs opacity-70">{w.network}</div>
+                                    </div>
+                                    {selectedWallet === w.id && <CheckCircle className="w-5 h-5 text-brand-500 ml-auto" />}
+                                </button>
+                            )) : (
+                                <div className="text-sm text-red-400 bg-red-400/10 p-3 rounded-lg">
+                                    No payment methods available. Please contact admin.
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {wallet && (
+                        <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-center">
+                            <div className="text-xs text-slate-500 mb-2">Send payment to address:</div>
+                            <div className="font-mono text-xs text-white break-all bg-slate-900 p-2 rounded border border-slate-700 mb-2">
+                                {wallet.address}
+                            </div>
+                            <div className="text-[10px] text-amber-400 flex items-center justify-center gap-1">
+                                <AlertCircle className="w-3 h-3" /> Only send {wallet.coin} ({wallet.network})
+                            </div>
+                        </div>
+                    )}
+
+                    <button
+                        onClick={handlePayment}
+                        disabled={processing || !wallet}
+                        className="w-full bg-brand-600 hover:bg-brand-500 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-brand-600/20 flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                        {processing && <Loader2 className="w-4 h-4 animate-spin" />}
+                        {processing ? 'Verifying...' : 'I have made the payment'}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const ConnectBrokerModal: React.FC<{
+    provider: { id: string, name: string, type: string, logo: string },
+    portfolios: PortfolioSummary[],
+    onClose: () => void,
+    onSuccess: (creds: any, config: { mode: 'new' | 'existing' | 'none', id?: string }) => Promise<void>,
+    existingCredentials?: { apiKey: string, apiSecret?: string }
+}> = ({ provider, portfolios, onClose, onSuccess, existingCredentials }) => {
+    const [apiKey, setApiKey] = useState(existingCredentials?.apiKey || '');
+    const [apiSecret, setApiSecret] = useState(existingCredentials?.apiSecret || '');
+    const [connecting, setConnecting] = useState(false);
+    
+    const [connectionMethod, setConnectionMethod] = useState<'api' | 'oauth'>(
+        (provider.type === 'Crypto' || existingCredentials) ? 'api' : 'oauth'
+    );
+    
+    const [targetMode, setTargetMode] = useState<'new' | 'existing'>('new');
+    const [existingPortfolioId, setExistingPortfolioId] = useState(portfolios[0]?.id || '');
+
+    const isEditing = !!existingCredentials;
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setConnecting(true);
+        
+        try {
+            const config = isEditing 
+                ? { mode: 'none' as const }
+                : { mode: targetMode, id: existingPortfolioId };
+
+            await onSuccess({ apiKey, apiSecret }, config);
+        } catch (error) {
+            console.error("Connection failed", error);
+            alert("Failed to update connection. Please try again.");
+        } finally {
+            setConnecting(false);
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+            <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-fade-in-up">
+                <div className="p-6 border-b border-slate-800 flex justify-between items-center">
+                    <div className="flex items-center gap-3">
+                        <img src={provider.logo} alt={provider.name} className="w-8 h-8 rounded bg-white p-0.5 object-contain" onError={(e) => e.currentTarget.src = 'https://via.placeholder.com/40'} />
+                        <h3 className="text-xl font-bold text-white">{isEditing ? 'Update' : 'Connect'} {provider.name}</h3>
+                    </div>
+                    <button onClick={onClose}><X className="w-5 h-5 text-slate-400 hover:text-white" /></button>
+                </div>
+
+                <div className="px-6 pt-6 pb-0">
+                    <div className="flex p-1 bg-slate-950 rounded-lg border border-slate-800">
+                        <button 
+                            type="button"
+                            onClick={() => setConnectionMethod('oauth')}
+                            className={`flex-1 py-2 text-xs font-bold rounded-md transition-colors ${connectionMethod === 'oauth' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-500 hover:text-slate-300'}`}
+                        >
+                            OAuth 2.0
+                        </button>
+                        <button 
+                            type="button"
+                            onClick={() => setConnectionMethod('api')}
+                            className={`flex-1 py-2 text-xs font-bold rounded-md transition-colors ${connectionMethod === 'api' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-500 hover:text-slate-300'}`}
+                        >
+                            API Key
+                        </button>
+                    </div>
+                </div>
+
+                <form onSubmit={handleSubmit} className="p-6 space-y-5">
+                    {!isEditing && (
+                        <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 space-y-3">
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input type="radio" name="target" checked={targetMode === 'new'} onChange={() => setTargetMode('new')} className="text-brand-600 focus:ring-brand-500" />
+                                <span className="text-sm text-slate-300">Create new Portfolio</span>
+                            </label>
+                            <div className="border-t border-slate-800 pt-2">
+                                <label className="flex items-center gap-2 cursor-pointer mb-2">
+                                    <input type="radio" name="target" checked={targetMode === 'existing'} onChange={() => setTargetMode('existing')} className="text-brand-600 focus:ring-brand-500" />
+                                    <span className="text-sm text-slate-300">Link to existing Portfolio</span>
+                                </label>
+                                {targetMode === 'existing' && (
+                                    <select 
+                                        value={existingPortfolioId}
+                                        onChange={(e) => setExistingPortfolioId(e.target.value)}
+                                        className="w-full bg-slate-950 border border-slate-700 rounded-lg py-2 pl-3 pr-4 text-white focus:border-brand-500 outline-none appearance-none cursor-pointer text-sm"
+                                    >
+                                        {portfolios.map(p => (
+                                            <option key={p.id} value={p.id}>{p.name}</option>
+                                        ))}
+                                    </select>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {connectionMethod === 'api' ? (
+                        <>
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">API Key</label>
+                                <input 
+                                    type="text" 
+                                    required
+                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg py-3 px-3 text-white focus:border-brand-500 outline-none text-sm font-mono"
+                                    value={apiKey}
+                                    onChange={(e) => setApiKey(e.target.value)}
+                                    placeholder="Enter API Key"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">API Secret (Optional)</label>
+                                <input 
+                                    type="password" 
+                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg py-3 px-3 text-white focus:border-brand-500 outline-none text-sm font-mono"
+                                    value={apiSecret}
+                                    onChange={(e) => setApiSecret(e.target.value)}
+                                    placeholder="Enter API Secret"
+                                />
+                            </div>
+                        </>
+                    ) : (
+                        <div className="text-center py-6 bg-slate-950 border border-slate-800 rounded-xl">
+                            <div className="w-16 h-16 bg-slate-900 rounded-full flex items-center justify-center mx-auto mb-4 border border-slate-800">
+                                <img src={provider.logo} alt={provider.name} className="w-8 h-8 object-contain" onError={(e) => e.currentTarget.src = 'https://via.placeholder.com/40'} />
+                            </div>
+                            <p className="text-slate-400 text-sm mb-4 px-4">
+                                You will be redirected to {provider.name} to securely authorize access. We never see your password.
+                            </p>
+                        </div>
+                    )}
+
+                    <button 
+                        type="submit"
+                        disabled={connecting}
+                        className="w-full bg-brand-600 hover:bg-brand-500 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-brand-600/20 flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                        {connecting && <Loader2 className="w-4 h-4 animate-spin" />}
+                        {connecting ? 'Connecting...' : (isEditing ? 'Update Connection' : 'Connect Account')}
+                    </button>
+                </form>
+            </div>
+        </div>
+    );
+};
+
+// --- MAIN COMPONENT ---
 
 const SettingsView: React.FC = () => {
   const { user, logout, plans, wallets, updateUserPlan, integrations, connectBroker, disconnectBroker, brokerProviders } = useAuth();
-  const { addNewPortfolio } = usePortfolio();
+  const { addNewPortfolio, importPortfolio, marketDataApiKey, setMarketDataApiKey, syncBroker, portfolios, activePortfolioId } = usePortfolio();
   const [activeSection, setActiveSection] = useState<'profile' | 'billing' | 'security' | 'integrations'>('profile');
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showConnectModal, setShowConnectModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
   const [selectedPlan, setSelectedPlan] = useState<PlanTier | null>(null);
+  
+  const [syncing, setSyncing] = useState<Record<string, boolean>>({});
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importTargetPortfolio, setImportTargetPortfolio] = useState(activePortfolioId);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [localApiKey, setLocalApiKey] = useState(marketDataApiKey || '');
+  const [savingKey, setSavingKey] = useState(false);
+
+  useEffect(() => {
+      if (marketDataApiKey) {
+          setLocalApiKey(marketDataApiKey);
+      }
+  }, [marketDataApiKey]);
+
+  useEffect(() => {
+      if(activePortfolioId) setImportTargetPortfolio(activePortfolioId);
+  }, [activePortfolioId, showImportModal]);
 
   const activeProvider = brokerProviders.find(p => p.id === selectedProviderId);
 
-  const handleConnectSuccess = (providerId: string, name: string, type: string, logo: string, credentials: any) => {
-      // 1. Add to Auth Context Integrations list (Also handles updates)
-      connectBroker(providerId, name, type as any, logo, credentials);
+  const handleConnectSuccess = async (
+      providerId: string, 
+      name: string, 
+      type: string, 
+      logo: string, 
+      credentials: any, 
+      targetPortfolioConfig: { mode: 'new' | 'existing' | 'none', id?: string }
+  ) => {
+      const performConnect = async () => {
+          try {
+              await connectBroker(providerId, name, type as any, logo, credentials);
+              
+              if (targetPortfolioConfig.mode === 'new') {
+                  await addNewPortfolio(`${name} Portfolio`, type as any);
+              }
+          } catch (e) {
+              console.error("Connection flow error:", e);
+          }
+      };
+
+      // Increased timeout to 10s for better large dataset support
+      const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 10000));
       
-      // 2. Simulate syncing data only if it's a NEW connection (not an update)
-      if (!integrations.find(i => i.providerId === providerId)) {
-        addNewPortfolio(name, type as any);
-      }
+      await Promise.race([performConnect(), timeoutPromise]);
       
       setShowConnectModal(false);
   };
@@ -34,8 +302,154 @@ const SettingsView: React.FC = () => {
       setShowConnectModal(true);
   }
 
+  const handleSaveMarketKey = () => {
+      setSavingKey(true);
+      try {
+          setMarketDataApiKey(localApiKey);
+          alert("API Key Saved Successfully!");
+      } catch (e) {
+          console.error("Failed to save API Key", e);
+      } finally {
+          setSavingKey(false);
+      }
+  };
+
+  const handleSync = async (brokerId: string) => {
+      setSyncing(prev => ({ ...prev, [brokerId]: true }));
+      await syncBroker(brokerId);
+      setSyncing(prev => ({ ...prev, [brokerId]: false }));
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (e.target.files && e.target.files.length > 0) {
+          setImportFile(e.target.files[0]);
+      }
+  };
+
+  const parseCSV = (text: string) => {
+        const lines = text.split(/\r\n|\n/);
+        if (lines.length < 2) return [];
+        
+        // Improved Header Normalization for Trading 212 specific format
+        const headers = lines[0].toLowerCase().split(',').map(h => h.trim().replace(/['"]+/g, '').replace(/^\ufeff/, ''));
+        const data = [];
+        
+        console.log("CSV Headers:", headers);
+
+        // Robust Column Mapping - PRIORITIZE TICKER OVER ISIN
+        // Identify indexes
+        let symIdx = -1;
+        // Explicit Priority: Ticker > Symbol > Instrument > ISIN
+        if (headers.includes('ticker')) symIdx = headers.indexOf('ticker');
+        else if (headers.includes('symbol')) symIdx = headers.indexOf('symbol');
+        else if (headers.includes('instrument')) symIdx = headers.indexOf('instrument');
+        else if (headers.includes('isin')) symIdx = headers.indexOf('isin');
+
+        // Find Name column
+        const nameIdx = headers.indexOf('name');
+
+        // Other columns
+        let qtyIdx = headers.findIndex(h => h === 'no. of shares' || h === 'quantity' || h === 'shares' || h === 'qty');
+        let priceIdx = headers.findIndex(h => h === 'price / share' || h === 'price' || h === 'avg price' || h === 'cost');
+        let typeIdx = headers.findIndex(h => h === 'action' || h === 'type' || h === 'side');
+        let dateIdx = headers.findIndex(h => h === 'time' || h === 'date');
+
+        if (symIdx === -1 || qtyIdx === -1 || priceIdx === -1) {
+            alert("Error: Missing required columns. Please ensure your CSV has 'Ticker', 'No. of shares', and 'Price / share' headers.");
+            return [];
+        }
+
+        for(let i=1; i<lines.length; i++) {
+            if(!lines[i].trim()) continue;
+            
+            // Regex split to handle commas inside quotes (common in T212 names)
+            const row = lines[i].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(c => c.trim().replace(/^"|"$/g, '').replace(/""/g, '"'));
+            
+            if (row.length < 3) continue;
+            
+            const rawSymbol = row[symIdx];
+            const rawName = nameIdx > -1 ? row[nameIdx] : '';
+            const rawQty = row[qtyIdx];
+            const rawPrice = row[priceIdx];
+            const rawType = typeIdx > -1 ? row[typeIdx] : 'BUY';
+            const rawDate = dateIdx > -1 ? row[dateIdx] : new Date().toISOString();
+
+            // Skip lines without essential data
+            if (!rawSymbol || !rawQty || !rawPrice) continue;
+
+            // Skip Dividends/Deposits/Withdrawals/Conversions to prevent skewing share counts
+            const lowerType = rawType.toLowerCase();
+            if (lowerType.includes('dividend') || lowerType.includes('deposit') || lowerType.includes('withdrawal') || lowerType.includes('conversion')) {
+                continue;
+            }
+
+            const cleanNumber = (str: string) => {
+                if (!str) return 0;
+                // Support T212 formats like "1,234.56" or "1234.56"
+                // Remove currency symbols or commas
+                return parseFloat(str.replace(/[^0-9.-]+/g, ''));
+            };
+
+            const shares = cleanNumber(rawQty);
+            const price = cleanNumber(rawPrice);
+            
+            if (isNaN(shares) || isNaN(price)) continue;
+
+            // Handle T212 "Market sell" / "Limit sell"
+            let type: 'BUY' | 'SELL' = 'BUY';
+            if (lowerType.includes('sell')) type = 'SELL';
+            
+            // Fix date parsing for formats like "2025-09-01 11:58:10"
+            let date = new Date().toISOString().split('T')[0];
+            try {
+                const parsedDate = new Date(rawDate);
+                if (!isNaN(parsedDate.getTime())) {
+                    date = parsedDate.toISOString().split('T')[0];
+                }
+            } catch (e) {}
+
+            // Normalize Ticker (remove _US_EQ suffix if present)
+            let symbol = rawSymbol.toUpperCase();
+            // Common T212 suffix removal
+            if (symbol.endsWith('_US_EQ')) symbol = symbol.replace('_US_EQ', '');
+            else if (symbol.endsWith('_UK_EQ')) symbol = symbol.replace('_UK_EQ', '');
+            else if (symbol.includes('_')) symbol = symbol.split('_')[0];
+
+            data.push({
+                symbol,
+                name: rawName || symbol, // Capture name if available
+                date,
+                type,
+                shares,
+                price
+            });
+        }
+        return data;
+  };
+
+  const handleImport = () => {
+      if (!importFile) return;
+      setIsImporting(true);
+      
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+          const text = e.target?.result as string;
+          const transactions = parseCSV(text);
+          
+          if (transactions.length > 0) {
+              await importPortfolio(`Imported ${new Date().toLocaleDateString()}`, transactions, importTargetPortfolio);
+              setShowImportModal(false);
+              setImportFile(null);
+          } else {
+              alert("No valid transactions found in file. Please check headers.");
+          }
+          setIsImporting(false);
+      };
+      reader.readAsText(importFile);
+  };
+
   return (
-    <div className="max-w-4xl mx-auto animate-fade-in">
+    <div className="max-w-4xl mx-auto animate-fade-in pb-20">
       <h1 className="text-3xl font-bold text-white mb-8">Settings</h1>
       
       <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
@@ -69,7 +483,6 @@ const SettingsView: React.FC = () => {
 
         {/* Content Area */}
         <div className="md:col-span-3">
-            
             {/* PROFILE SECTION */}
             {activeSection === 'profile' && (
                 <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-6">
@@ -106,10 +519,60 @@ const SettingsView: React.FC = () => {
             {/* INTEGRATIONS SECTION */}
             {activeSection === 'integrations' && (
                 <div className="space-y-8">
+                     {/* Market Data Configuration */}
+                     <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
+                        <h2 className="text-xl font-bold text-white border-b border-slate-800 pb-4 mb-6 flex items-center gap-2">
+                            <Database className="w-5 h-5 text-blue-500" /> Market Data Configuration
+                        </h2>
+                        <div className="space-y-4">
+                            <div className="bg-slate-950 border border-slate-800 p-4 rounded-lg">
+                                <div className="flex justify-between items-start mb-2">
+                                    <div className="flex items-center gap-2">
+                                        <Globe className="w-4 h-4 text-emerald-500" />
+                                        <span className="font-bold text-white text-sm">Free Market Data</span>
+                                    </div>
+                                    <span className={`text-[10px] px-2 py-0.5 rounded border ${marketDataApiKey ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-slate-800 text-slate-500 border-slate-700'}`}>
+                                        {marketDataApiKey ? 'Active' : 'Inactive'}
+                                    </span>
+                                </div>
+                                <p className="text-xs text-slate-400 mb-3">
+                                    We use <strong>CoinGecko</strong> for real-time crypto prices. For Stocks & ETFs, please provide a free API key below to enable real-time updates.
+                                </p>
+                                
+                                <div className="space-y-2">
+                                    <label className="block text-xs font-bold text-slate-500 uppercase">Finnhub API Key (Stocks)</label>
+                                    <div className="flex gap-2">
+                                        <input 
+                                            type="password" 
+                                            value={localApiKey}
+                                            onChange={(e) => setLocalApiKey(e.target.value)}
+                                            placeholder="Enter your Finnhub.io API Key"
+                                            className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:border-brand-500 outline-none"
+                                        />
+                                        <button 
+                                            onClick={handleSaveMarketKey}
+                                            disabled={savingKey}
+                                            className="bg-brand-600 hover:bg-brand-500 text-white text-sm font-bold px-4 rounded-lg transition-colors disabled:opacity-50 min-w-[80px]"
+                                        >
+                                            {savingKey ? (
+                                                <Loader2 className="w-4 h-4 animate-spin mx-auto" />
+                                            ) : (
+                                                'Save'
+                                            )}
+                                        </button>
+                                    </div>
+                                    <div className="text-[10px] text-slate-500">
+                                        Don't have a key? <a href="https://finnhub.io/register" target="_blank" rel="noreferrer" className="text-brand-400 hover:underline">Get a free one here</a>.
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                     </div>
+
                      {/* Connected Integrations */}
                      <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
                         <h2 className="text-xl font-bold text-white border-b border-slate-800 pb-4 mb-6 flex items-center gap-2">
-                            <CheckCircle className="w-5 h-5 text-emerald-500" /> Connected Accounts
+                            <CheckCircle className="w-5 h-5 text-emerald-500" /> Connected Brokerages
                         </h2>
                         {integrations.length > 0 ? (
                             <div className="space-y-4">
@@ -134,8 +597,13 @@ const SettingsView: React.FC = () => {
                                             </div>
                                         </div>
                                         <div className="flex items-center gap-3">
-                                            <button className="p-2 text-slate-400 hover:text-brand-400 transition-colors" title="Sync Now">
-                                                <RefreshCw className="w-4 h-4" />
+                                            <button 
+                                                onClick={() => handleSync(integration.id)}
+                                                className="p-2 text-slate-400 hover:text-brand-400 transition-colors" 
+                                                title="Sync Now"
+                                                disabled={syncing[integration.id]}
+                                            >
+                                                <RefreshCw className={`w-4 h-4 ${syncing[integration.id] ? 'animate-spin text-brand-500' : ''}`} />
                                             </button>
                                             <button 
                                                 onClick={() => openEditModal(integration)}
@@ -234,7 +702,7 @@ const SettingsView: React.FC = () => {
                 </div>
             )}
 
-            {/* BILLING / SUBSCRIPTION SECTION */}
+            {/* BILLING SECTION */}
             {activeSection === 'billing' && (
                 <div className="space-y-6">
                     <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 flex justify-between items-center">
@@ -314,7 +782,25 @@ const SettingsView: React.FC = () => {
             )}
         </div>
 
-        {/* Manual Import Modal */}
+        {/* Connect Broker Modal */}
+        {showConnectModal && activeProvider && (
+            <ConnectBrokerModal 
+                provider={activeProvider}
+                portfolios={portfolios}
+                onClose={() => setShowConnectModal(false)}
+                onSuccess={(credentials, config) => handleConnectSuccess(
+                    activeProvider.id, 
+                    activeProvider.name, 
+                    activeProvider.type, 
+                    activeProvider.logo,
+                    credentials,
+                    config
+                )}
+                existingCredentials={integrations.find(i => i.providerId === activeProvider.id)?.apiCredentials}
+            />
+        )}
+
+        {/* Import Modal */}
         {showImportModal && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 backdrop-blur-sm p-4 animate-in fade-in duration-200">
                 <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden animate-fade-in-up">
@@ -325,60 +811,59 @@ const SettingsView: React.FC = () => {
                             </div>
                             <h3 className="text-xl font-bold text-white">Import Portfolio Data</h3>
                         </div>
-                        <button onClick={() => setShowImportModal(false)}><X className="w-5 h-5 text-slate-400 hover:text-white" /></button>
+                        <button onClick={() => { setShowImportModal(false); setImportFile(null); }}><X className="w-5 h-5 text-slate-400 hover:text-white" /></button>
                     </div>
+                    
                     <div className="p-8">
-                        <div className="border-2 border-dashed border-slate-700 hover:border-brand-500 rounded-xl p-12 flex flex-col items-center justify-center text-center cursor-pointer transition-colors bg-slate-950/50 group">
-                            <UploadCloud className="w-16 h-16 text-slate-600 group-hover:text-brand-500 mb-4 transition-colors" />
-                            <p className="text-lg font-medium text-white mb-2">Drop your CSV file here</p>
-                            <p className="text-sm text-slate-500 mb-6">or click to browse from your computer</p>
-                            <button className="px-4 py-2 bg-slate-800 text-white rounded-lg text-sm font-medium hover:bg-slate-700 transition-colors">
-                                Select File
-                            </button>
+                        <div className="mb-6">
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Target Portfolio</label>
+                            <div className="relative">
+                                <Briefcase className="absolute left-3 top-3 w-4 h-4 text-slate-500" />
+                                <select 
+                                    value={importTargetPortfolio}
+                                    onChange={(e) => setImportTargetPortfolio(e.target.value)}
+                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg py-2.5 pl-10 pr-4 text-white focus:border-brand-500 outline-none appearance-none cursor-pointer"
+                                >
+                                    {portfolios.map(p => (
+                                        <option key={p.id} value={p.id}>{p.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+
+                        <input type="file" accept=".csv" className="hidden" ref={fileInputRef} onChange={handleFileChange} />
+                        <div onClick={() => fileInputRef.current?.click()} className={`border-2 border-dashed rounded-xl p-12 flex flex-col items-center justify-center text-center cursor-pointer transition-colors group ${importFile ? 'border-brand-500 bg-brand-500/5' : 'border-slate-700 hover:border-brand-500 bg-slate-950/50'}`}>
+                            {importFile ? (
+                                <>
+                                    <FileSpreadsheet className="w-16 h-16 text-brand-500 mb-4" />
+                                    <p className="text-lg font-medium text-white mb-2">{importFile.name}</p>
+                                    <p className="text-sm text-slate-500">{(importFile.size / 1024).toFixed(2)} KB</p>
+                                </>
+                            ) : (
+                                <>
+                                    <UploadCloud className="w-16 h-16 text-slate-600 group-hover:text-brand-500 mb-4 transition-colors" />
+                                    <p className="text-lg font-medium text-white mb-2">Drop your CSV file here</p>
+                                    <p className="text-sm text-slate-500 mb-6">or click to browse from your computer</p>
+                                    <span className="px-4 py-2 bg-slate-800 text-white rounded-lg text-sm font-medium hover:bg-slate-700 transition-colors">Select File</span>
+                                </>
+                            )}
                         </div>
                         <div className="mt-6 flex justify-between items-center text-xs text-slate-500">
-                            <div>Supported formats: .CSV, .XLSX</div>
+                            <div>Supported format: .CSV (T212 Export)</div>
                             <button className="text-brand-400 hover:underline">Download Template</button>
                         </div>
                     </div>
                     <div className="p-6 bg-slate-950 border-t border-slate-800 flex justify-end gap-3">
-                        <button 
-                            onClick={() => setShowImportModal(false)}
-                            className="px-4 py-2 text-slate-400 hover:text-white transition-colors"
-                        >
-                            Cancel
-                        </button>
-                         <button 
-                            onClick={() => {
-                                handleConnectSuccess('manual_import', 'Manual Import', 'Mixed', '', {});
-                                setShowImportModal(false);
-                            }}
-                            className="px-6 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-lg font-bold transition-colors"
-                        >
-                            Import Data
+                        <button onClick={() => { setShowImportModal(false); setImportFile(null); }} className="px-4 py-2 text-slate-400 hover:text-white transition-colors">Cancel</button>
+                         <button onClick={handleImport} disabled={!importFile || isImporting} className="px-6 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-lg font-bold transition-colors disabled:opacity-50 flex items-center gap-2">
+                            {isImporting && <Loader2 className="w-4 h-4 animate-spin" />}
+                            {isImporting ? 'Importing...' : 'Import Data'}
                         </button>
                     </div>
                 </div>
             </div>
         )}
 
-        {/* Connect Broker Modal */}
-        {showConnectModal && activeProvider && (
-            <ConnectBrokerModal 
-                provider={activeProvider}
-                onClose={() => setShowConnectModal(false)}
-                onSuccess={(credentials) => handleConnectSuccess(
-                    activeProvider.id, 
-                    activeProvider.name, 
-                    activeProvider.type, 
-                    activeProvider.logo,
-                    credentials
-                )}
-                existingCredentials={integrations.find(i => i.providerId === activeProvider.id)?.apiCredentials}
-            />
-        )}
-
-        {/* Payment Modal */}
         {showPaymentModal && selectedPlan && (
             <PaymentModal 
                 planId={selectedPlan} 
@@ -396,219 +881,5 @@ const SettingsView: React.FC = () => {
     </div>
   );
 };
-
-const ConnectBrokerModal: React.FC<{
-    provider: { id: string, name: string, type: string, logo: string },
-    onClose: () => void,
-    onSuccess: (creds: any) => void,
-    existingCredentials?: { apiKey: string, apiSecret?: string }
-}> = ({ provider, onClose, onSuccess, existingCredentials }) => {
-    const [apiKey, setApiKey] = useState(existingCredentials?.apiKey || '');
-    const [apiSecret, setApiSecret] = useState(existingCredentials?.apiSecret || '');
-    const [connecting, setConnecting] = useState(false);
-
-    const isEditing = !!existingCredentials;
-
-    const handleSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        setConnecting(true);
-        // Simulate connection delay
-        setTimeout(() => {
-            onSuccess({ apiKey, apiSecret });
-        }, 1500);
-    };
-
-    return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-            <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-fade-in-up">
-                <div className="p-6 border-b border-slate-800 flex justify-between items-center">
-                    <div className="flex items-center gap-3">
-                        <img src={provider.logo} alt={provider.name} className="w-8 h-8 rounded bg-white p-0.5 object-contain" onError={(e) => e.currentTarget.src = 'https://via.placeholder.com/40'} />
-                        <h3 className="text-xl font-bold text-white">{isEditing ? 'Update' : 'Connect'} {provider.name}</h3>
-                    </div>
-                    <button onClick={onClose}><X className="w-5 h-5 text-slate-400 hover:text-white" /></button>
-                </div>
-
-                <form onSubmit={handleSubmit} className="p-6 space-y-5">
-                    {provider.type === 'Crypto' ? (
-                        <>
-                            <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 text-xs text-blue-300 mb-4">
-                                API Keys are stored securely. Please ensure you have enabled "Read Only" permissions on your exchange.
-                            </div>
-                            <div>
-                                <label className="block text-sm text-slate-400 mb-1.5">API Key</label>
-                                <input 
-                                    type="text" 
-                                    required 
-                                    value={apiKey}
-                                    onChange={e => setApiKey(e.target.value)}
-                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:border-brand-500 focus:outline-none font-mono text-sm" 
-                                    placeholder="Enter your public API key" 
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm text-slate-400 mb-1.5">API Secret</label>
-                                <input 
-                                    type="password" 
-                                    required 
-                                    value={apiSecret}
-                                    onChange={e => setApiSecret(e.target.value)}
-                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:border-brand-500 focus:outline-none font-mono text-sm" 
-                                    placeholder="Enter your secret key" 
-                                />
-                            </div>
-                        </>
-                    ) : (
-                        <div className="text-center py-6">
-                            <p className="text-slate-400 text-sm mb-6">
-                                You will be redirected to {provider.name} to authorize WealthOS to access your portfolio data securely.
-                            </p>
-                            <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 mb-4">
-                                <div className="flex items-center justify-center gap-4">
-                                    <div className="w-10 h-10 bg-brand-600 rounded-full flex items-center justify-center">
-                                        <Shield className="w-5 h-5 text-white" />
-                                    </div>
-                                    <div className="h-px w-12 bg-slate-700"></div>
-                                    <img src={provider.logo} className="w-10 h-10 rounded-full bg-white p-1" alt="" />
-                                </div>
-                                <div className="mt-3 text-xs text-slate-500">Secure OAuth 2.0 Connection</div>
-                            </div>
-                        </div>
-                    )}
-
-                    <button 
-                        type="submit" 
-                        disabled={connecting}
-                        className="w-full bg-brand-600 hover:bg-brand-500 text-white font-bold py-3.5 rounded-xl transition-colors flex items-center justify-center gap-2 disabled:opacity-70"
-                    >
-                        {connecting ? (
-                            <><Loader2 className="w-5 h-5 animate-spin" /> {isEditing ? 'Updating...' : 'Connecting...'}</>
-                        ) : (
-                            `${isEditing ? 'Update' : 'Connect'} ${provider.name}`
-                        )}
-                    </button>
-                </form>
-            </div>
-        </div>
-    );
-}
-
-const PaymentModal: React.FC<{ 
-    planId: PlanTier, 
-    wallets: CryptoWallet[], 
-    onClose: () => void, 
-    onSuccess: (id: PlanTier) => void,
-    price: number
-}> = ({ planId, wallets, onClose, onSuccess, price }) => {
-    const [selectedWalletId, setSelectedWalletId] = useState(wallets[0]?.id);
-    const [step, setStep] = useState<'select' | 'payment' | 'confirming'>('select');
-    
-    const activeWallet = wallets.find(w => w.id === selectedWalletId);
-
-    const handleCopy = (text: string) => {
-        navigator.clipboard.writeText(text);
-        // In a real app, show a toast
-    };
-
-    const handleConfirm = () => {
-        setStep('confirming');
-        // Simulate network check
-        setTimeout(() => {
-            onSuccess(planId);
-        }, 2000);
-    };
-
-    return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 backdrop-blur-sm p-4">
-            <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-fade-in-up">
-                <div className="p-6 border-b border-slate-800 flex justify-between items-center">
-                    <h3 className="text-xl font-bold text-white">Subscribe to {planId}</h3>
-                    <button onClick={onClose}><X className="w-5 h-5 text-slate-400 hover:text-white" /></button>
-                </div>
-
-                <div className="p-6">
-                    {step === 'select' && (
-                        <div className="space-y-6">
-                            <div className="text-center">
-                                <div className="text-sm text-slate-400">Total to pay</div>
-                                <div className="text-4xl font-bold text-white mt-1">${price.toFixed(2)}</div>
-                            </div>
-
-                            <div>
-                                <label className="block text-sm font-medium text-slate-400 mb-3">Select Payment Method (Crypto Only)</label>
-                                <div className="grid grid-cols-2 gap-3">
-                                    {wallets.map(w => (
-                                        <button 
-                                            key={w.id}
-                                            onClick={() => setSelectedWalletId(w.id)}
-                                            className={`p-3 rounded-xl border text-left flex items-center gap-3 transition-all ${selectedWalletId === w.id ? 'bg-brand-600/10 border-brand-500 ring-1 ring-brand-500' : 'bg-slate-950 border-slate-700 hover:border-slate-600'}`}
-                                        >
-                                            <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center font-bold text-white text-xs">
-                                                {w.coin[0]}
-                                            </div>
-                                            <div>
-                                                <div className="font-bold text-white text-sm">{w.coin}</div>
-                                                <div className="text-[10px] text-slate-500">{w.network}</div>
-                                            </div>
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-                            
-                            <button 
-                                onClick={() => setStep('payment')}
-                                className="w-full bg-brand-600 hover:bg-brand-500 text-white font-bold py-3 rounded-xl transition-colors"
-                            >
-                                Continue to Payment
-                            </button>
-                        </div>
-                    )}
-
-                    {step === 'payment' && activeWallet && (
-                         <div className="space-y-6">
-                             <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-center">
-                                 <div className="text-sm text-slate-400 mb-2">Send exactly <span className="text-white font-bold">${price.toFixed(2)}</span> equivalent in {activeWallet.coin} to:</div>
-                                 <div className="bg-white p-2 inline-block rounded-lg mb-4">
-                                     {/* Placeholder QR */}
-                                     <img src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${activeWallet.address}`} alt="QR" className="w-32 h-32" />
-                                 </div>
-                                 <div className="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-lg p-3">
-                                     <code className="text-xs text-slate-300 break-all font-mono">{activeWallet.address}</code>
-                                     <button onClick={() => handleCopy(activeWallet.address)} className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white">
-                                         <Copy className="w-4 h-4" />
-                                     </button>
-                                 </div>
-                                 <div className="text-xs text-amber-400 mt-3 flex items-center justify-center gap-1">
-                                     <CheckCircle className="w-3 h-3" /> Ensure you send on {activeWallet.network} network
-                                 </div>
-                             </div>
-
-                             <button 
-                                onClick={handleConfirm}
-                                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl transition-colors"
-                            >
-                                I have sent the payment
-                            </button>
-                             <button 
-                                onClick={() => setStep('select')}
-                                className="w-full text-slate-400 text-sm hover:text-white mt-2"
-                            >
-                                Go Back
-                            </button>
-                         </div>
-                    )}
-
-                    {step === 'confirming' && (
-                        <div className="text-center py-12">
-                            <Loader2 className="w-12 h-12 text-brand-500 animate-spin mx-auto mb-4" />
-                            <h3 className="text-xl font-bold text-white mb-2">Verifying Transaction...</h3>
-                            <p className="text-slate-400 text-sm max-w-xs mx-auto">Please wait while we confirm your payment on the blockchain. Do not close this window.</p>
-                        </div>
-                    )}
-                </div>
-            </div>
-        </div>
-    );
-}
 
 export default SettingsView;

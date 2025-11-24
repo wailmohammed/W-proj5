@@ -1,16 +1,20 @@
 
 import React, { useState, useEffect } from 'react';
-import { X, Search, Plus, TrendingUp, DollarSign, Calendar, Car, Home, CreditCard, Landmark } from 'lucide-react';
+import { X, Search, Plus, TrendingUp, DollarSign, Calendar, Car, Home, CreditCard, Landmark, Globe, Briefcase } from 'lucide-react';
 import { MOCK_MARKET_ASSETS } from '../constants';
 import { usePortfolio } from '../context/PortfolioContext';
 import { ManualAssetType } from '../types';
+import { EXCHANGE_RATES } from '../services/marketData';
 
 type ModalTab = 'investment' | 'asset' | 'liability';
 
 const AddAssetModal: React.FC = () => {
-  const { closeAddAssetModal, addTransaction, addManualAsset, addLiability, preSelectedAssetTicker } = usePortfolio();
+  const { closeAddAssetModal, addTransaction, addManualAsset, addLiability, preSelectedAssetTicker, portfolios, activePortfolioId } = usePortfolio();
   const [activeTab, setActiveTab] = useState<ModalTab>('investment');
   
+  // Portfolio Selection
+  const [targetPortfolioId, setTargetPortfolioId] = useState(activePortfolioId);
+
   // Investment State
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
@@ -23,6 +27,7 @@ const AddAssetModal: React.FC = () => {
   const [assetType, setAssetType] = useState<ManualAssetType>('Real Estate');
   const [assetValue, setAssetValue] = useState('');
   const [purchasePrice, setPurchasePrice] = useState('');
+  const [assetCurrency, setAssetCurrency] = useState('USD');
   
   // Liability State
   const [liabilityName, setLiabilityName] = useState('');
@@ -30,6 +35,13 @@ const AddAssetModal: React.FC = () => {
   const [liabilityAmount, setLiabilityAmount] = useState('');
   const [interestRate, setInterestRate] = useState('');
   const [monthlyPayment, setMonthlyPayment] = useState('');
+
+  // Ensure target portfolio matches active if it changes
+  useEffect(() => {
+      if (activePortfolioId) {
+          setTargetPortfolioId(activePortfolioId);
+      }
+  }, [activePortfolioId]);
 
   // Pre-select asset if ticker is passed
   useEffect(() => {
@@ -58,7 +70,7 @@ const AddAssetModal: React.FC = () => {
   const handleInvestmentSubmit = (e: React.FormEvent) => {
       e.preventDefault();
       if (selectedAssetId && shares && price) {
-          addTransaction(selectedAssetId, 'BUY', parseFloat(shares), parseFloat(price), date);
+          addTransaction(selectedAssetId, 'BUY', parseFloat(shares), parseFloat(price), date, targetPortfolioId);
           closeAddAssetModal();
       }
   };
@@ -70,10 +82,10 @@ const AddAssetModal: React.FC = () => {
               name: assetName,
               type: assetType,
               value: parseFloat(assetValue),
-              currency: 'USD',
+              currency: assetCurrency,
               purchaseDate: date,
               purchasePrice: purchasePrice ? parseFloat(purchasePrice) : undefined
-          });
+          }, targetPortfolioId);
           closeAddAssetModal();
       }
   };
@@ -87,7 +99,7 @@ const AddAssetModal: React.FC = () => {
               amount: parseFloat(liabilityAmount),
               interestRate: parseFloat(interestRate) || 0,
               monthlyPayment: parseFloat(monthlyPayment) || 0
-          });
+          }, targetPortfolioId);
           closeAddAssetModal();
       }
   };
@@ -126,6 +138,22 @@ const AddAssetModal: React.FC = () => {
         </div>
 
         <div className="p-6 overflow-y-auto">
+            <div className="mb-6">
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Target Portfolio</label>
+                <div className="relative">
+                    <Briefcase className="absolute left-3 top-3 w-4 h-4 text-slate-500" />
+                    <select 
+                        value={targetPortfolioId}
+                        onChange={(e) => setTargetPortfolioId(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg py-2.5 pl-10 pr-4 text-white focus:border-brand-500 outline-none appearance-none cursor-pointer"
+                    >
+                        {portfolios.map(p => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                    </select>
+                </div>
+            </div>
+
             {/* INVESTMENT TAB */}
             {activeTab === 'investment' && (
                 !selectedAsset ? (
@@ -310,13 +338,19 @@ const AddAssetModal: React.FC = () => {
 
                     <div className="grid grid-cols-2 gap-4">
                         <div>
-                            <label className="block text-sm font-medium text-slate-400 mb-1.5">Purchase Date</label>
-                            <input 
-                                type="date" 
-                                className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-white focus:border-brand-500 outline-none [color-scheme:dark]"
-                                value={date}
-                                onChange={e => setDate(e.target.value)}
-                            />
+                            <label className="block text-sm font-medium text-slate-400 mb-1.5">Currency</label>
+                            <div className="relative">
+                                <Globe className="absolute left-3 top-3 w-4 h-4 text-slate-500" />
+                                <select 
+                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg py-2.5 pl-10 pr-4 text-white focus:border-brand-500 outline-none"
+                                    value={assetCurrency}
+                                    onChange={e => setAssetCurrency(e.target.value)}
+                                >
+                                    {Object.keys(EXCHANGE_RATES).map(curr => (
+                                        <option key={curr} value={curr}>{curr}</option>
+                                    ))}
+                                </select>
+                            </div>
                         </div>
                         <div>
                             <label className="block text-sm font-medium text-slate-400 mb-1.5">Purchase Price</label>
@@ -330,6 +364,19 @@ const AddAssetModal: React.FC = () => {
                                     onChange={e => setPurchasePrice(e.target.value)}
                                 />
                             </div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label className="block text-sm font-medium text-slate-400 mb-1.5">Purchase Date</label>
+                        <div className="relative">
+                            <Calendar className="absolute left-3 top-3 w-4 h-4 text-slate-500" />
+                            <input 
+                                type="date" 
+                                className="w-full bg-slate-950 border border-slate-700 rounded-lg py-2.5 pl-10 pr-4 text-white focus:border-brand-500 outline-none [color-scheme:dark]"
+                                value={date}
+                                onChange={e => setDate(e.target.value)}
+                            />
                         </div>
                     </div>
 

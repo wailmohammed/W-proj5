@@ -44,7 +44,8 @@ interface AuthContextType {
   loading: boolean;
   login: (email: string, pass: string) => Promise<boolean>;
   loginWithGoogle: () => Promise<boolean>;
-  register: (name: string, email: string, pass: string) => Promise<boolean>;
+  register: (name: string, email: string, pass: string) => Promise<{ success: boolean, message?: string }>;
+  resetPassword: (email: string) => Promise<{ success: boolean, message?: string }>;
   logout: () => void;
   updateUserPlan: (plan: PlanTier) => void;
   
@@ -83,6 +84,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [integrations, setIntegrations] = useState<BrokerIntegration[]>([]);
   const [brokerProviders, setBrokerProviders] = useState<BrokerProvider[]>(DEFAULT_BROKER_PROVIDERS);
 
+  // --- Initialize Integrations from LocalStorage (Fallback) ---
+  useEffect(() => {
+      const savedIntegrations = localStorage.getItem('wealthos_integrations');
+      if (savedIntegrations) {
+          try {
+              const parsed = JSON.parse(savedIntegrations);
+              if (Array.isArray(parsed)) {
+                  setIntegrations(parsed);
+              }
+          } catch (e) {
+              console.error("Failed to parse saved integrations");
+          }
+      }
+  }, []);
+
   // --- Supabase Auth Listener ---
   useEffect(() => {
     const initializeAuth = async () => {
@@ -115,7 +131,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           } else if (event === 'SIGNED_OUT') {
             setUser(null);
             setAllUsers([]);
-            setIntegrations([]);
+            // Do not clear integrations immediately on logout to preserve for immediate re-login if DB fails
           }
         });
 
@@ -144,15 +160,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       let name = 'User';
       let avatar = undefined;
       let joinedDate = new Date().toISOString().split('T')[0];
+      let isFallback = false;
 
       if (error) {
-          // Log error properly to avoid [object Object] in console
-          console.warn("Profile Fetch Warning:", error.message || JSON.stringify(error));
-
-          // Handle missing tables or missing row
-          if (error.code === '42P01') {
-              console.warn("CRITICAL: 'profiles' table missing. Please run supabase_schema.sql in SQL Editor.");
-          } else if (error.code === 'PGRST116' || error.message?.includes('0 rows') || error.details?.includes('0 rows')) {
+          // Log error as warning if it's a known RLS issue
+          const isRecursion = error.message?.includes('infinite recursion') || error.code === '42P17';
+          
+          if (isRecursion) {
+              console.warn("DB Policy Warning: Infinite recursion detected. Using local fallback profile.");
+              isFallback = true;
+          } else if (error.code === '42P01') {
+              console.warn("DB Error: 'profiles' table missing. Please check schema.");
+          } else if (error.code === 'PGRST116') {
               // Missing Row: Logic to auto-fix if triggers failed
               console.log("Profile missing for user, attempting to create default profile...");
               const { error: insertError } = await supabase.from('profiles').insert({
@@ -164,16 +183,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               });
               
               if (!insertError) {
-                  // Retry fetch once
                   const { data: retryData } = await supabase.from('profiles').select('*').eq('id', userId).single();
                   if (retryData) {
                       role = (retryData.role as UserRole) || 'USER';
                       plan = (retryData.plan as PlanTier) || 'Free';
                       name = retryData.full_name || 'User';
                   }
-              } else {
-                  console.error("Failed to create fallback profile:", JSON.stringify(insertError));
               }
+          } else {
+              console.warn("Profile fetch error:", error.message);
           }
       } else if (data) {
           role = (data.role as UserRole) || 'USER';
@@ -207,7 +225,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         avatar: avatar
       };
       
-      // Always set the user, even if profile fetch had issues (fallback to defaults calculated above)
       setUser(appUser);
       
       // If Admin, fetch all users for dashboard
@@ -215,12 +232,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           fetchAllUsers();
       }
       
-      // Fetch Integrations
-      fetchIntegrations(userId);
+      // Fetch Integrations - Skip DB fetch if we are in fallback mode
+      if (!isFallback) {
+          fetchIntegrations(userId);
+      } else {
+          // Ensure we don't clear existing local integrations if DB is unreachable
+          console.log("Using local integrations due to fallback mode.");
+      }
 
     } catch (error) {
-      console.error('Exception in profile flow:', error instanceof Error ? error.message : String(error));
-      // Fallback to basic user state on error to prevent lock-out
+      console.error('Exception in profile flow:', error);
       setUser({
         id: userId,
         email: email,
@@ -237,7 +258,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const fetchAllUsers = async () => {
       if (!isSupabaseConfigured) return;
       const { data, error } = await supabase.from('profiles').select('*');
-      if (error && error.code === '42P01') return; // Tables missing
+      if (error) return;
       
       if (data) {
           const users: User[] = data.map(p => ({
@@ -256,7 +277,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const fetchIntegrations = async (userId: string) => {
       if (!isSupabaseConfigured) return;
       const { data, error } = await supabase.from('broker_integrations').select('*').eq('user_id', userId);
-      if (error && error.code === '42P01') return; // Tables missing
+      
+      if (error) {
+          console.warn("Failed to fetch integrations from DB, using local state.");
+          return; 
+      }
 
       if (data) {
           const ints: BrokerIntegration[] = data.map(i => ({
@@ -269,7 +294,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               logo: i.logo,
               apiCredentials: i.api_credentials
           }));
-          setIntegrations(ints);
+          
+          // Only update if we found data, otherwise we risk overwriting local data if RLS filtered everything
+          if (ints.length > 0) {
+              setIntegrations(ints);
+              localStorage.setItem('wealthos_integrations', JSON.stringify(ints));
+          }
       }
   };
 
@@ -285,20 +315,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
     }
 
-    // 2. Fallback for Demo Accounts (if Supabase fails or using test account)
+    // 2. Fallback for Demo Accounts
     const demoAccounts: Record<string, User> = {
         'wailafmohammed@gmail.com': {
             id: 'super-admin-wail',
             email: 'wailafmohammed@gmail.com',
-            name: 'Wail (Super Admin)',
-            role: 'SUPER_ADMIN',
-            plan: 'Ultimate',
-            joinedDate: new Date().toISOString().split('T')[0],
-            avatar: 'https://ui-avatars.com/api/?name=Wail+Mohammed&background=6366f1&color=fff'
-        },
-        'wailafbdallad@gmail.com': {
-            id: 'super-admin-wail-alt',
-            email: 'wailafbdallad@gmail.com',
             name: 'Wail (Super Admin)',
             role: 'SUPER_ADMIN',
             plan: 'Ultimate',
@@ -328,9 +349,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (demoAccounts[email]) {
         console.log("Using Demo Account Fallback for:", email);
         setUser(demoAccounts[email]);
-        if (demoAccounts[email].role !== 'USER') {
-            setAllUsers(Object.values(demoAccounts));
-        }
         return true;
     }
 
@@ -369,30 +387,48 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             plan: 'Free',
             joinedDate: new Date().toISOString().split('T')[0]
         });
-        return true;
+        return { success: true };
     }
     try {
       const { data, error } = await supabase.auth.signUp({
         email,
         password: pass,
         options: {
-          data: { full_name: name } // Passed to handle_new_user trigger
+          data: { full_name: name }
         }
       });
       
       if (error) throw error;
       
-      // If auto-confirm is on, log them in immediately if a session is returned
+      // If email confirmation is required, data.session will be null, but data.user will be present.
+      if (data.user && !data.session) {
+          return { success: true, message: "Account created! Please check your email to confirm your registration." };
+      }
+
       if (data.session) {
           await fetchUserProfile(data.user!.id, email);
-          return true;
+          return { success: true };
       }
       
-      return true; // Registration successful, check email
-    } catch (error) {
+      return { success: true };
+    } catch (error: any) {
       console.error('Registration failed:', error);
-      return false;
+      return { success: false, message: error.message || "Registration failed." };
     }
+  };
+
+  const resetPassword = async (email: string) => {
+      if (!isSupabaseConfigured) return { success: true, message: "Mock password reset email sent." };
+      try {
+          const { error } = await supabase.auth.resetPasswordForEmail(email, {
+              redirectTo: window.location.origin,
+          });
+          if (error) throw error;
+          return { success: true, message: "Password reset instructions sent to your email." };
+      } catch (error: any) {
+          console.error("Reset password error:", error);
+          return { success: false, message: error.message || "Failed to send reset email." };
+      }
   };
 
   const logout = async () => {
@@ -404,7 +440,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const updateUserPlan = async (plan: PlanTier) => {
     if (user) {
-      if (isSupabaseConfigured && !user.id.startsWith('super-admin') && !user.id.startsWith('admin-demo') && !user.id.startsWith('user-demo')) {
+      if (isSupabaseConfigured && !user.id.startsWith('super-admin') && !user.id.startsWith('admin-demo')) {
           const { error } = await supabase.from('profiles').update({ plan }).eq('id', user.id);
           if (!error) {
             setUser({ ...user, plan });
@@ -421,38 +457,122 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const updateBrokerProvider = (id: string, updates: Partial<BrokerProvider>) => setBrokerProviders(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p));
 
   const connectBroker = async (providerId: string, name: string, type: 'Stock' | 'Crypto' | 'Mixed', logo: string, credentials: any) => {
-    // Optimistic update
-    const newIntegration: BrokerIntegration = {
-        id: Math.random().toString(36).substr(2, 9),
-        providerId,
-        name,
-        type,
-        status: 'Connected',
-        lastSync: 'Just now',
-        logo,
-        apiCredentials: credentials
-    };
-    setIntegrations(prev => [...prev, newIntegration]);
+    // 1. OPTIMISTIC UPDATE: Immediate feedback for UI
+    const existingIndex = integrations.findIndex(i => i.providerId === providerId);
+    let newIntegrations = [...integrations];
+    const status: any = 'Connected';
+    const lastSync = new Date().toLocaleString();
 
-    if (isSupabaseConfigured && user && !user.id.startsWith('mock') && !user.id.startsWith('super-admin') && !user.id.startsWith('admin-demo')) {
-        const { error } = await supabase.from('broker_integrations').insert({
-            user_id: user.id,
-            provider_id: providerId,
+    if (existingIndex >= 0) {
+        newIntegrations[existingIndex] = {
+            ...newIntegrations[existingIndex],
+            name,
+            apiCredentials: credentials,
+            lastSync,
+            status,
+            logo // update logo if changed
+        };
+    } else {
+        const newIntegration: BrokerIntegration = {
+            id: Math.random().toString(36).substr(2, 9),
+            providerId,
             name,
             type,
+            status,
+            lastSync,
             logo,
-            api_credentials: credentials,
-            status: 'Connected'
-        });
-        if (error) console.error("Failed to save integration", error);
+            apiCredentials: credentials
+        };
+        newIntegrations.push(newIntegration);
     }
-    return true;
+
+    setIntegrations(newIntegrations);
+    try {
+        localStorage.setItem('wealthos_integrations', JSON.stringify(newIntegrations));
+    } catch (e) {
+        console.error("Local storage full or error", e);
+    }
+
+    // 2. DB SYNC (Background / Non-blocking)
+    if (isSupabaseConfigured && user && !user.id.startsWith('mock') && !user.id.startsWith('admin-demo')) {
+        // Detached promise execution to avoid UI blocking
+        (async () => {
+            try {
+                // Manual Upsert logic to avoid unique constraint race conditions
+                // First check if record exists for this user + provider combo
+                const { data: existing } = await supabase
+                    .from('broker_integrations')
+                    .select('id')
+                    .eq('user_id', user.id)
+                    .eq('provider_id', providerId)
+                    .maybeSingle();
+
+                if (existing) {
+                    // Update
+                    await supabase
+                        .from('broker_integrations')
+                        .update({
+                            name,
+                            type,
+                            logo,
+                            api_credentials: credentials, 
+                            status: 'Connected',
+                            last_sync: new Date().toISOString()
+                        })
+                        .eq('id', existing.id);
+                } else {
+                    // Insert - wrap in try/catch specifically for unique constraint
+                    try {
+                        await supabase
+                            .from('broker_integrations')
+                            .insert({
+                                user_id: user.id,
+                                provider_id: providerId,
+                                name,
+                                type,
+                                logo,
+                                api_credentials: credentials,
+                                status: 'Connected',
+                                last_sync: new Date().toISOString()
+                            });
+                    } catch (insertErr: any) {
+                        // Retry as update if race condition occurred
+                        if (insertErr.code === '23505') { 
+                             await supabase
+                                .from('broker_integrations')
+                                .update({
+                                    name,
+                                    type,
+                                    logo,
+                                    api_credentials: credentials, 
+                                    status: 'Connected',
+                                    last_sync: new Date().toISOString()
+                                })
+                                .eq('user_id', user.id)
+                                .eq('provider_id', providerId);
+                        }
+                    }
+                }
+            } catch (dbError) {
+                console.error("Background DB Sync Failed for Broker:", dbError);
+            }
+        })();
+    }
+
+    return true; // Always return true immediately to unblock UI
   };
 
   const disconnectBroker = async (id: string) => {
-      setIntegrations(prev => prev.filter(i => i.id !== id));
-      if (isSupabaseConfigured && user && !user.id.startsWith('mock') && !user.id.startsWith('super-admin')) {
-          await supabase.from('broker_integrations').delete().eq('id', id);
+      setIntegrations(prev => {
+          const updated = prev.filter(i => i.id !== id);
+          localStorage.setItem('wealthos_integrations', JSON.stringify(updated));
+          return updated;
+      });
+      if (isSupabaseConfigured && user && !user.id.startsWith('mock')) {
+          // Fire and forget
+          supabase.from('broker_integrations').delete().eq('id', id).then(({ error }) => {
+              if (error) console.error("Failed to delete broker integration from DB", error);
+          });
       }
   };
 
@@ -466,7 +586,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const deleteUser = async (id: string) => {
       setAllUsers(prev => prev.filter(u => u.id !== id));
       if (isSupabaseConfigured) {
-          // Attempt to delete from profiles (RLS must allow this for Super Admin)
           await supabase.from('profiles').delete().eq('id', id);
       }
   };
@@ -486,6 +605,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       login,
       loginWithGoogle,
       register,
+      resetPassword,
       logout,
       updateUserPlan,
       brokerProviders,

@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { TrendingUp, Wallet, ArrowUpRight, Activity, Loader2, Sparkles, BarChart3, Layers, Bell, Gauge, AlertCircle, Newspaper, ExternalLink, Power, ArrowDownRight, Plus, BellRing, Trash2 } from 'lucide-react';
+import { TrendingUp, Wallet, ArrowUpRight, Activity, Loader2, Sparkles, BarChart3, Layers, Bell, Gauge, AlertCircle, Newspaper, ExternalLink, Power, ArrowDownRight, Plus, BellRing, Trash2, Settings, Zap, Megaphone, DollarSign } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { generatePortfolioInsight } from '../services/geminiService';
 import { usePortfolio } from '../context/PortfolioContext';
@@ -9,20 +9,24 @@ import { MOCK_NEWS } from '../constants';
 
 // New Ticker Component
 const StockTicker: React.FC<{ holdings: any[] }> = ({ holdings }) => {
+    if (!holdings || holdings.length === 0) {
+        return (
+            <div className="w-full bg-slate-950 border-b border-slate-800 py-2 flex items-center justify-center">
+                <span className="text-slate-500 text-xs px-6">Add assets to see live ticker updates...</span>
+            </div>
+        );
+    }
+
     return (
         <div className="w-full bg-slate-950 border-b border-slate-800 overflow-hidden py-2 flex items-center relative z-0">
             <div className="flex animate-scroll whitespace-nowrap">
-                {/* Duplicate list for seamless loop */}
-                {[...holdings, ...holdings, ...holdings].map((h, i) => {
-                    // Simulate a daily change based on deviation from avg price for demo
-                    const change = ((h.currentPrice - h.avgPrice) / h.avgPrice) * 100;
-                    // Or just random daily move for visual flair if avgPrice is too far off
+                {/* Duplicate list multiple times for seamless loop even with few items */}
+                {[...holdings, ...holdings, ...holdings, ...holdings, ...holdings].map((h, i) => {
                     const dailyMove = (Math.random() * 2 - 1); 
-                    
                     return (
                         <div key={`${h.id}-${i}`} className="flex items-center gap-2 px-6 border-r border-slate-800/50">
                             <span className="font-bold text-slate-300 text-xs">{h.symbol}</span>
-                            <span className="text-white text-xs font-mono">${h.currentPrice.toFixed(2)}</span>
+                            <span className="text-white text-xs font-mono">${(h.currentPrice || 0).toFixed(2)}</span>
                             <span className={`text-[10px] flex items-center ${dailyMove >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                                 {dailyMove >= 0 ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
                                 {Math.abs(dailyMove).toFixed(2)}%
@@ -30,9 +34,6 @@ const StockTicker: React.FC<{ holdings: any[] }> = ({ holdings }) => {
                         </div>
                     );
                 })}
-                {holdings.length === 0 && (
-                    <span className="text-slate-500 text-xs px-6">Add assets to see live ticker updates...</span>
-                )}
             </div>
             <style>{`
                 @keyframes scroll {
@@ -40,7 +41,7 @@ const StockTicker: React.FC<{ holdings: any[] }> = ({ holdings }) => {
                     100% { transform: translateX(-33%); }
                 }
                 .animate-scroll {
-                    animation: scroll 30s linear infinite;
+                    animation: scroll 40s linear infinite;
                 }
                 .animate-scroll:hover {
                     animation-play-state: paused;
@@ -55,16 +56,70 @@ const DashboardView: React.FC = () => {
   const { theme } = useTheme();
   const [insight, setInsight] = useState<string | null>(null);
   const [loadingInsight, setLoadingInsight] = useState(false);
+  
+  // Alert Widget State
+  const [alertTab, setAlertTab] = useState<'price' | 'smart'>('price');
   const [isAddingAlert, setIsAddingAlert] = useState(false);
   const [newAlertSymbol, setNewAlertSymbol] = useState('');
   const [newAlertPrice, setNewAlertPrice] = useState('');
   const [newAlertCondition, setNewAlertCondition] = useState<'ABOVE' | 'BELOW'>('ABOVE');
+  
+  // Smart Triggers State (Mocked)
+  const [smartTriggers, setSmartTriggers] = useState({
+      dividendCuts: true,
+      earningsReports: false,
+      marketVolatility: true
+  });
+
+  // Metrics Calculation for AI
+  const calculateBeta = (sector: string, type: string): number => {
+      if (type === 'Crypto') return 2.5;
+      if (sector === 'Technology') return 1.3;
+      if (sector === 'Utilities') return 0.5;
+      if (sector === 'Real Estate') return 0.7;
+      return 1.0;
+  }
+  
+  const portfolioBeta = activePortfolio.totalValue > 0 
+    ? activePortfolio.holdings.reduce((acc: number, h) => acc + (calculateBeta(h.sector, String(h.assetType)) * ((h.shares * h.currentPrice)/activePortfolio.totalValue)), 0)
+    : 1.0;
+
+  const portfolioYield = activePortfolio.totalValue > 0 
+    ? (activePortfolio.holdings.reduce((acc: number, h) => acc + (h.shares * h.currentPrice * (h.dividendYield/100)), 0) / activePortfolio.totalValue) * 100 
+    : 0;
+
+  // Detailed AI Data Prep
+  const sectorWeights = activePortfolio.holdings.reduce((acc: Record<string, number>, h) => {
+      const val = h.shares * h.currentPrice;
+      acc[h.sector] = (acc[h.sector] || 0) + val;
+      return acc;
+  }, {} as Record<string, number>);
+
+  const sectorWeightsFormatted: Record<string, string> = {};
+  Object.entries(sectorWeights).forEach(([k, v]) => {
+      if (activePortfolio.totalValue > 0) {
+          sectorWeightsFormatted[k] = `${((v / activePortfolio.totalValue) * 100).toFixed(1)}%`;
+      }
+  });
+
+  const totalCostBasis = activePortfolio.holdings.reduce((acc: number, h) => acc + (h.shares * h.avgPrice), 0);
+  const costBasisSummary = activePortfolio.totalValue > 0 
+      ? `Total Cost: $${totalCostBasis.toLocaleString()}, Unrealized P/L: $${(activePortfolio.totalValue - totalCostBasis).toLocaleString()}` 
+      : "No holdings";
+
+  const recentTx = (activePortfolio.transactions || []).slice(0, 3).map(t => `${t.type} ${t.shares} ${t.symbol} @ $${t.price}`);
 
   // Auto-generate insight on mount/update
   useEffect(() => {
     const initInsight = async () => {
         setLoadingInsight(true);
-        const text = await generatePortfolioInsight(activePortfolio);
+        const text = await generatePortfolioInsight(activePortfolio, {
+            beta: portfolioBeta,
+            yield: portfolioYield,
+            sectorWeights: sectorWeightsFormatted,
+            costBasisSummary: costBasisSummary,
+            recentTransactions: recentTx
+        });
         setInsight(text);
         setLoadingInsight(false);
     };
@@ -73,7 +128,7 @@ const DashboardView: React.FC = () => {
     } else {
         setInsight("Add assets to your portfolio to see AI insights.");
     }
-  }, [activePortfolio.id, activePortfolio.holdings.length]);
+  }, [activePortfolio.id, activePortfolio.holdings.length]); // Dependencies reduced to avoid loops on derived values
 
   // Calculate total dividend income dynamically
   const annualDividendIncome = activePortfolio.holdings.reduce((acc, h) => {
@@ -107,6 +162,10 @@ const DashboardView: React.FC = () => {
           setNewAlertSymbol('');
           setNewAlertPrice('');
       }
+  };
+
+  const toggleSmartTrigger = (key: keyof typeof smartTriggers) => {
+      setSmartTriggers(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
   return (
@@ -275,7 +334,7 @@ const DashboardView: React.FC = () => {
                                 backgroundColor: theme === 'dark' ? '#0f172a' : '#ffffff', 
                                 borderColor: theme === 'dark' ? '#334155' : '#cbd5e1', 
                                 color: theme === 'dark' ? '#f1f5f9' : '#0f172a', 
-                                borderRadius: '12px',
+                                borderRadius: '12px', 
                                 boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'
                             }}
                             formatter={(value: number) => [`$${value.toLocaleString()}`, '']}
@@ -288,75 +347,150 @@ const DashboardView: React.FC = () => {
         </div>
 
         {/* Active Alerts Widget */}
-        <div className="space-y-6">
+        <div className="col-span-1">
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-sm h-full flex flex-col">
-                <div className="flex items-center justify-between mb-6">
-                    <h3 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                        <BellRing className="w-4 h-4" /> Active Alerts
-                    </h3>
-                    <button 
-                        onClick={() => setIsAddingAlert(true)}
-                        className="text-xs bg-brand-600 text-white px-2 py-1 rounded-md hover:bg-brand-500 transition-colors flex items-center gap-1"
-                    >
-                        <Plus className="w-3 h-3" /> Add
-                    </button>
-                </div>
-
-                <div className="flex-1 space-y-3 overflow-y-auto max-h-[300px] pr-1">
-                    {alerts.length === 0 ? (
-                        <div className="text-center text-slate-500 text-xs py-8">No active alerts</div>
-                    ) : (
-                        alerts.map(alert => (
-                            <div key={alert.id} className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-950/50 rounded-xl border border-slate-200 dark:border-slate-800 group">
-                                <div>
-                                    <div className="font-bold text-slate-900 dark:text-white text-sm">{alert.symbol}</div>
-                                    <div className="text-xs text-slate-500">
-                                        Notify if {alert.condition.toLowerCase()} <span className="font-bold text-slate-700 dark:text-slate-300">${alert.targetPrice}</span>
-                                    </div>
-                                </div>
-                                <button 
-                                    onClick={() => removeAlert(alert.id)}
-                                    className="text-slate-400 hover:text-red-500 transition-colors p-1"
-                                >
-                                    <Trash2 className="w-4 h-4" />
-                                </button>
-                            </div>
-                        ))
+                <div className="flex items-center justify-between mb-4 border-b border-slate-100 dark:border-slate-800 pb-4">
+                    <div className="flex items-center gap-4">
+                        <button 
+                            onClick={() => setAlertTab('price')}
+                            className={`text-sm font-bold uppercase tracking-wider flex items-center gap-2 transition-colors ${alertTab === 'price' ? 'text-brand-500' : 'text-slate-400 hover:text-slate-300'}`}
+                        >
+                            Price Alerts
+                        </button>
+                        <button 
+                            onClick={() => setAlertTab('smart')}
+                            className={`text-sm font-bold uppercase tracking-wider flex items-center gap-2 transition-colors ${alertTab === 'smart' ? 'text-brand-500' : 'text-slate-400 hover:text-slate-300'}`}
+                        >
+                            Smart Triggers
+                        </button>
+                    </div>
+                    {alertTab === 'price' && (
+                        <button 
+                            onClick={() => setIsAddingAlert(true)}
+                            className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors"
+                        >
+                            <Plus className="w-4 h-4 text-slate-500 hover:text-brand-500" />
+                        </button>
                     )}
                 </div>
 
-                {isAddingAlert && (
-                    <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800">
-                        <form onSubmit={handleCreateAlert} className="space-y-2">
-                            <input 
-                                type="text" 
-                                placeholder="Symbol (e.g. AAPL)" 
-                                className="w-full bg-slate-100 dark:bg-slate-800 border border-transparent focus:border-brand-500 rounded px-2 py-1.5 text-xs text-slate-900 dark:text-white outline-none"
-                                value={newAlertSymbol}
-                                onChange={e => setNewAlertSymbol(e.target.value.toUpperCase())}
-                                required
-                            />
-                            <div className="flex gap-2">
+                <div className="flex-1 space-y-3 overflow-y-auto max-h-[300px] pr-1 scrollbar-thin scrollbar-thumb-slate-200 dark:scrollbar-thumb-slate-700">
+                    {alertTab === 'price' ? (
+                        alerts.length === 0 ? (
+                            <div className="text-center text-slate-500 text-xs py-8 flex flex-col items-center">
+                                <Bell className="w-8 h-8 mb-2 opacity-20" />
+                                No active price alerts
+                            </div>
+                        ) : (
+                            alerts.map(alert => (
+                                <div key={alert.id} className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-950/50 rounded-xl border border-slate-200 dark:border-slate-800 group hover:border-brand-500/30 transition-colors">
+                                    <div>
+                                        <div className="font-bold text-slate-900 dark:text-white text-sm">{alert.symbol}</div>
+                                        <div className="text-xs text-slate-500">
+                                            Trigger if {alert.condition.toLowerCase()} <span className="font-bold text-slate-700 dark:text-slate-300">${alert.targetPrice}</span>
+                                        </div>
+                                    </div>
+                                    <button 
+                                        onClick={() => removeAlert(alert.id)}
+                                        className="text-slate-400 hover:text-red-500 transition-colors p-1 opacity-0 group-hover:opacity-100"
+                                    >
+                                        <Trash2 className="w-4 h-4" />
+                                    </button>
+                                </div>
+                            ))
+                        )
+                    ) : (
+                        /* Smart Triggers Tab */
+                        <div className="space-y-4 pt-1">
+                            <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-950/50 rounded-xl border border-slate-200 dark:border-slate-800">
+                                <div className="flex items-center gap-3">
+                                    <div className="p-2 bg-red-500/10 rounded-lg">
+                                        <AlertCircle className="w-4 h-4 text-red-500" />
+                                    </div>
+                                    <div>
+                                        <div className="font-bold text-slate-900 dark:text-white text-sm">Dividend Cuts</div>
+                                        <div className="text-[10px] text-slate-500">Alert if payout ratio > 100%</div>
+                                    </div>
+                                </div>
+                                <button 
+                                    onClick={() => toggleSmartTrigger('dividendCuts')}
+                                    className={`w-10 h-5 rounded-full transition-colors relative ${smartTriggers.dividendCuts ? 'bg-emerald-500' : 'bg-slate-600'}`}
+                                >
+                                    <div className={`absolute top-1 left-1 w-3 h-3 rounded-full bg-white transition-transform ${smartTriggers.dividendCuts ? 'translate-x-5' : ''}`}></div>
+                                </button>
+                            </div>
+
+                            <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-950/50 rounded-xl border border-slate-200 dark:border-slate-800">
+                                <div className="flex items-center gap-3">
+                                    <div className="p-2 bg-blue-500/10 rounded-lg">
+                                        <Megaphone className="w-4 h-4 text-blue-500" />
+                                    </div>
+                                    <div>
+                                        <div className="font-bold text-slate-900 dark:text-white text-sm">Earnings Reports</div>
+                                        <div className="text-[10px] text-slate-500">Notify 1 day before earnings</div>
+                                    </div>
+                                </div>
+                                <button 
+                                    onClick={() => toggleSmartTrigger('earningsReports')}
+                                    className={`w-10 h-5 rounded-full transition-colors relative ${smartTriggers.earningsReports ? 'bg-emerald-500' : 'bg-slate-600'}`}
+                                >
+                                    <div className={`absolute top-1 left-1 w-3 h-3 rounded-full bg-white transition-transform ${smartTriggers.earningsReports ? 'translate-x-5' : ''}`}></div>
+                                </button>
+                            </div>
+
+                            <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-950/50 rounded-xl border border-slate-200 dark:border-slate-800">
+                                <div className="flex items-center gap-3">
+                                    <div className="p-2 bg-amber-500/10 rounded-lg">
+                                        <Zap className="w-4 h-4 text-amber-500" />
+                                    </div>
+                                    <div>
+                                        <div className="font-bold text-slate-900 dark:text-white text-sm">Market Volatility</div>
+                                        <div className="text-[10px] text-slate-500">Alert if daily drop > 3%</div>
+                                    </div>
+                                </div>
+                                <button 
+                                    onClick={() => toggleSmartTrigger('marketVolatility')}
+                                    className={`w-10 h-5 rounded-full transition-colors relative ${smartTriggers.marketVolatility ? 'bg-emerald-500' : 'bg-slate-600'}`}
+                                >
+                                    <div className={`absolute top-1 left-1 w-3 h-3 rounded-full bg-white transition-transform ${smartTriggers.marketVolatility ? 'translate-x-5' : ''}`}></div>
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                {isAddingAlert && alertTab === 'price' && (
+                    <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800 animate-fade-in">
+                        <form onSubmit={handleCreateAlert} className="space-y-3">
+                            <div className="flex flex-col gap-2">
+                                <input 
+                                    type="text" 
+                                    placeholder="Symbol (e.g. AAPL)" 
+                                    className="w-full bg-slate-100 dark:bg-slate-800 border border-transparent focus:border-brand-500 rounded px-3 py-2 text-sm text-slate-900 dark:text-white outline-none"
+                                    value={newAlertSymbol}
+                                    onChange={e => setNewAlertSymbol(e.target.value.toUpperCase())}
+                                    required
+                                />
                                 <select 
-                                    className="bg-slate-100 dark:bg-slate-800 border border-transparent rounded px-2 py-1.5 text-xs text-slate-900 dark:text-white outline-none"
+                                    className="w-full bg-slate-100 dark:bg-slate-800 border border-transparent rounded px-3 py-2 text-sm text-slate-900 dark:text-white outline-none"
                                     value={newAlertCondition}
                                     onChange={e => setNewAlertCondition(e.target.value as any)}
                                 >
-                                    <option value="ABOVE">Above</option>
-                                    <option value="BELOW">Below</option>
+                                    <option value="ABOVE">Above Price</option>
+                                    <option value="BELOW">Below Price</option>
                                 </select>
                                 <input 
                                     type="number" 
-                                    placeholder="Price" 
-                                    className="flex-1 bg-slate-100 dark:bg-slate-800 border border-transparent focus:border-brand-500 rounded px-2 py-1.5 text-xs text-slate-900 dark:text-white outline-none"
+                                    placeholder="Target Price ($)" 
+                                    className="w-full bg-slate-100 dark:bg-slate-800 border border-transparent focus:border-brand-500 rounded px-3 py-2 text-sm text-slate-900 dark:text-white outline-none"
                                     value={newAlertPrice}
                                     onChange={e => setNewAlertPrice(e.target.value)}
                                     required
                                 />
                             </div>
                             <div className="flex gap-2 mt-2">
-                                <button type="submit" className="flex-1 bg-emerald-500 hover:bg-emerald-400 text-white text-xs font-bold py-1.5 rounded transition-colors">Save</button>
-                                <button type="button" onClick={() => setIsAddingAlert(false)} className="flex-1 bg-slate-200 dark:bg-slate-800 text-slate-500 hover:text-white text-xs font-bold py-1.5 rounded transition-colors">Cancel</button>
+                                <button type="submit" className="flex-1 bg-emerald-500 hover:bg-emerald-400 text-white text-sm font-bold py-2 rounded transition-colors">Save</button>
+                                <button type="button" onClick={() => setIsAddingAlert(false)} className="flex-1 bg-slate-200 dark:bg-slate-800 text-slate-500 hover:text-white text-sm font-bold py-2 rounded transition-colors">Cancel</button>
                             </div>
                         </form>
                     </div>
