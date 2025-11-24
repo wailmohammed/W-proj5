@@ -18,3 +18,21 @@ View your app in AI Studio: https://ai.studio/apps/drive/16CB5hsyrGCQaKt1klSKHLo
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+# W-proj5: Scalable Stock & Dividend Tracker
+
+A FastAPI-based API for fetching stock prices, historical data, and dividends. Starts free with yfinance; scales to FMP/EODHD for commercial use.
+
+## Quick Start
+1. `pip install -r requirements.txt`
+2. `uvicorn main:app --reload`
+3. Visit http://localhost:8000/docs
+
+## Endpoints
+- GET /api/price/{ticker} (e.g., AAPL)
+- GET /api/historical/{ticker}?days=365
+- GET /api/dividends/{ticker}?limit=10
+
+## Scaling
+Edit .env → Change CURRENT_PROVIDER → Redeploy.
+
+Deploy: Railway/Render (free tiers).
